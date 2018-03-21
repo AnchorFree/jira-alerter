@@ -1,6 +1,6 @@
-# Tool to crate tickets in JIRA from Prometheus Alerts
+# Tool to craete tickets in JIRA from Prometheus Alerts
 
-This tool is for creating ticket from Prometheus alerts. It uses golang binary to run as daemon and lesten to incoming webhooks from prometheus alertmanager and create appropriate request to JIRA for creating alert in neede project. This tool is modified from https://github.com/free/jiralert . Thanks to Alin Sinpalean for original project.
+This tool is for creating ticket from Prometheus alerts. It uses golang binary to run as daemon and listen to incoming webhooks from prometheus alertmanager and create appropriate request to JIRA for creating alert in needed project. This tool is modified from https://github.com/free/jiralert . Thanks to Alin Sinpalean for original project.
 
 
 ### Values
