@@ -17,7 +17,7 @@ defaults:
   reopen_state: "To Do"
   # Do not reopen issues with this resolution. Optional.
   wont_fix_resolution: "Won't Fix"
-  # so not create labels, sometimes its failed to create labels
+  # Do not create labels, sometimes its failed to create labels
   add_labels: false
   # alert hash created using sha1 from summary and save on the bottom of alert, use in search to identify if alert already created, if empty will not search using alert_hash
   alert_hash: '{{ template "jira.summary" . }}'

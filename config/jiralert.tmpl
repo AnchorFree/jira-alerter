@@ -17,6 +17,6 @@ ALERT - [{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing |
 
 {{ if .GeneratorURL }}*Source:* {{ .GeneratorURL }}{{ end }}
 
-------------------------------------------------------------
+---------------------------------------------------------
   {{ end -}}
 {{ end -}}
