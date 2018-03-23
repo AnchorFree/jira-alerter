@@ -8,6 +8,8 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"os/signal"
+	"syscall"
 
 	"github.com/anchorfree/jira-alerter"
 	"github.com/anchorfree/jira-alerter/alertmanager"
@@ -43,72 +45,125 @@ func main() {
 
 	log.Infof("Starting JIRAlert version %s", Version)
 
-	config, _, err := jiralert.LoadConfigFile(*configFile)
-	if err != nil {
-		log.Fatalf("Error loading configuration: %s", err)
-	}
+	mux := http.ServeMux {}
 
-	tmpl, err := jiralert.LoadTemplate(config.Template)
-	if err != nil {
-		log.Fatalf("Error loading templates from %s: %s", config.Template, err)
-	}
+	reload := func() (err error) {
+		log.Infof("Loading configuration file %s", *configFile)
 
-	http.HandleFunc("/alert", func(w http.ResponseWriter, req *http.Request) {
-		log.V(1).Infof("Handling /alert webhook request")
-		defer req.Body.Close()
+	        config, _, err := jiralert.LoadConfigFile(*configFile)
+	        if err != nil {
+		        log.Errorf("Error loading configuration: %s", err)
+			return err
+	        }
 
-		// https://godoc.org/github.com/prometheus/alertmanager/template#Data
-		data := alertmanager.Data{}
-		if err := json.NewDecoder(req.Body).Decode(&data); err != nil {
-			errorHandler(w, http.StatusBadRequest, err, unknownReceiver, &data)
-			return
-		}
+		tmpl, err := jiralert.LoadTemplate(config.Template)
+		if err != nil {
+			log.Errorf("Error loading templates from %s: %s", config.Template, err)
+			return err
+	        }
 
-		conf := config.ReceiverByName(data.Receiver)
-		if conf == nil {
-			errorHandler(w, http.StatusNotFound, fmt.Errorf("Receiver missing: %s", data.Receiver), unknownReceiver, &data)
-			return
-		}
-		log.V(1).Infof("Matched receiver: %q", conf.Name)
+		mux = http.ServeMux {}
+		mux.HandleFunc("/alert", func(w http.ResponseWriter, req *http.Request) {
+			log.V(1).Infof("Handling /alert webhook request")
+			defer req.Body.Close()
 
-		// Filter out resolved alerts, not interested in them.
-		alerts := data.Alerts.Firing()
-		if len(alerts) < len(data.Alerts) {
-			log.Warningf("Please set \"send_resolved: false\" on receiver %s in the Alertmanager config", conf.Name)
-			data.Alerts = alerts
-		}
-
-		if len(data.Alerts) > 0 {
-			r, err := jiralert.NewReceiver(conf, tmpl)
-			if err != nil {
-				errorHandler(w, http.StatusInternalServerError, err, conf.Name, &data)
-			}
-			if retry, err := r.Notify(&data); err != nil {
-				var status int
-				if retry {
-					status = http.StatusServiceUnavailable
-				} else {
-					status = http.StatusInternalServerError
-				}
-				errorHandler(w, status, err, conf.Name, &data)
+			// https://godoc.org/github.com/prometheus/alertmanager/template#Data
+			data := alertmanager.Data{}
+			if err := json.NewDecoder(req.Body).Decode(&data); err != nil {
+				errorHandler(w, http.StatusBadRequest, err, unknownReceiver, &data)
 				return
 			}
-		}
 
-		requestTotal.WithLabelValues(conf.Name, "200").Inc()
-	})
+			conf := config.ReceiverByName(data.Receiver)
+			if conf == nil {
+				errorHandler(w, http.StatusNotFound, fmt.Errorf("Receiver missing: %s", data.Receiver), unknownReceiver, &data)
+				return
+			}
+			log.V(1).Infof("Matched receiver: %q", conf.Name)
 
-	http.HandleFunc("/", HomeHandlerFunc())
-	http.HandleFunc("/config", ConfigHandlerFunc(config))
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "OK", http.StatusOK) })
-	http.Handle("/metrics", promhttp.Handler())
+			// Filter out resolved alerts, not interested in them.
+			alerts := data.Alerts.Firing()
+			if len(alerts) < len(data.Alerts) {
+				log.Warningf("Please set \"send_resolved: false\" on receiver %s in the Alertmanager config", conf.Name)
+				data.Alerts = alerts
+			}
+
+			if len(data.Alerts) > 0 {
+				r, err := jiralert.NewReceiver(conf, tmpl)
+				if err != nil {
+					errorHandler(w, http.StatusInternalServerError, err, conf.Name, &data)
+				}
+				if retry, err := r.Notify(&data); err != nil {
+					var status int
+					if retry {
+						status = http.StatusServiceUnavailable
+					} else {
+						status = http.StatusInternalServerError
+					}
+					errorHandler(w, status, err, conf.Name, &data)
+					return
+				}
+			}
+
+			requestTotal.WithLabelValues(conf.Name, "200").Inc()
+		})
+
+		mux.HandleFunc("/", HomeHandlerFunc())
+		mux.HandleFunc("/config", ConfigHandlerFunc(config))
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { http.Error(w, "OK", http.StatusOK) })
+		mux.Handle("/metrics", promhttp.Handler())
+
+		return nil
+	}
+
+	err := reload()
+	if err != nil {
+		os.Exit(1)
+	}
 
 	if os.Getenv("PORT") != "" {
 		*listenAddress = ":" + os.Getenv("PORT")
 	}
 
 	log.Infof("Listening on %s", *listenAddress)
-	log.Fatal(http.ListenAndServe(*listenAddress, nil))
+
+	go listen(*listenAddress, &mux)
+
+	var (
+		hup      = make(chan os.Signal)
+		hupReady = make(chan bool)
+		term     = make(chan os.Signal, 1)
+	)
+	signal.Notify(hup, syscall.SIGHUP)
+	signal.Notify(term, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-hupReady
+		for {
+			select {
+			case <-hup:
+				log.Infof("Received SIGHUP, reloading...")
+				reload()
+			}
+		}
+	}()
+
+	// Wait for reload or termination signals.
+	close(hupReady) // Unblock SIGHUP handler.
+
+	<-term
+
+	log.Infof("Received SIGTERM, exiting gracefully...")
+
+}
+
+
+func listen(listen string, mux *http.ServeMux) {
+	err := http.ListenAndServe(listen, mux)
+	if err != nil {
+		log.Errorf("Error Listening: %s", err)
+		os.Exit(1)
+	}
 }
 
 func errorHandler(w http.ResponseWriter, status int, err error, receiver string, data *alertmanager.Data) {
