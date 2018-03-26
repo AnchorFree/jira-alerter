@@ -20,6 +20,7 @@ This tool is for creating ticket from Prometheus alerts. It uses golang binary t
 - `stderrthreshold` - value logs at or above this threshold go to stderr
 - `v` - value log level for V logs
 - `vmodule` - value comma-separated list of pattern=N settings for file-filtered logging
+- `check-config` - if defined will only check the configuration and templates and exit
 
 
 ### How its working
