@@ -25,6 +25,7 @@ const (
 var (
 	listenAddress = flag.String("listen-address", ":9097", "The address to listen on for HTTP requests.")
 	configFile    = flag.String("config", "config/jiralert.yml", "The JIRAlert configuration file")
+	checkConfig  = flag.Bool("check-config", false, "Check JIRAlert configuration file and templates that defined in flag -config")
 
 	// Version is the build version, set by make to latest git tag/hash via `-ldflags "-X main.Version=$(VERSION)"`.
 	Version = "<local build>"
@@ -61,6 +62,11 @@ func main() {
 			log.Errorf("Error loading templates from %s: %s", config.Template, err)
 			return err
 	        }
+
+                if *checkConfig {
+                        log.Infof("All check are passed")
+                        os.Exit(0)
+                }
 
 		mux = http.ServeMux {}
 		mux.HandleFunc("/alert", func(w http.ResponseWriter, req *http.Request) {
